@@ -1,38 +1,77 @@
-# pool-query-sample
+import { Connection, PublicKey, Keypair } from "@solana/web3.js";
+import {
+    WhirlpoolContext, ORCA_WHIRLPOOL_PROGRAM_ID, buildWhirlpoolClient,
+} from "@orca-so/whirlpools-sdk";
+import { Wallet } from "@coral-xyz/anchor";
+import fetch from "node-fetch";
+import Decimal from "decimal.js";
+import * as prompt from "prompt";
 
-## RPC endpoint
-You need Solana RPC Endpoint.
+import { getLiquidityDistribution } from "./liquidity_distribution";
 
-I think the following provider's free plan is nice for test environment.
+const V1_WHIRLPOOL_LIST_ENDPOINT = "https://api.mainnet.orca.so/v1/whirlpool/list";
 
-- Helius: https://www.helius.dev/pricing
-- Alchemy: https://www.alchemy.com/pricing
-- Quicknode: https://www.quicknode.com/pricing
+async function main() {
+  // fetch the list of pools
+  const response = await (await fetch(V1_WHIRLPOOL_LIST_ENDPOINT)).json();
+  const list = [];
+  response.whirlpools.forEach((p) => {
+    list.push({
+      address: new PublicKey(p.address),
+      name: `${p.tokenA.symbol}/${p.tokenB.symbol}(${p.tickSpacing})`,
+      symbolA: p.tokenA.symbol,
+      symbolB: p.tokenB.symbol,
+      decimalsA: p.tokenA.decimals,
+      decimalsB: p.tokenB.decimals,
+      mintA: new PublicKey(p.tokenA.mint),
+      mintB: new PublicKey(p.tokenB.mint),
+      tickSpacing: p.tickSpacing,
+      price: new Decimal(p.price),
+      usdTVL: new Decimal(p.tvl ?? 0),
+      usdVolumeDay: new Decimal(p.volume?.day ?? 0),
+    });
+  });
+  list.sort((a, b) => a.name.localeCompare(b.name));
 
-If you just want to try this repo, please ask the URL of endpoint.
+  // list pools
+  list.forEach((p) => { console.log(`${p.name}: ${p.address.toBase58()}`); });
 
-## Demo
+  // prompt (get target pool)
+  const input = await prompt.get([
+    "rpcServerEndpoint",
+    "whirlpoolAddress",
+  ]);
 
-```
-git clone https://github.com/yugure-orca/pool-query-sample.git
-```
-```
-cd pool-query-sample
-```
-```
-yarn install
-```
-```
-npx ts-node main.ts
-```
+  // build RPC client
+  console.log("rpcServerEndpoint:", input.rpcServerEndpoint);
+  const connection = new Connection(input.rpcServerEndpoint, "confirmed");
+  const ctx = WhirlpoolContext.from(connection, new Wallet(Keypair.generate()), ORCA_WHIRLPOOL_PROGRAM_ID);
+  const client = buildWhirlpoolClient(ctx);
 
-The all pools will be listed.
-You can choose 1 pool to print liquidity distribution.
+  // get pool
+  console.log("whirlpoolAddress:", input.whirlpoolAddress);
+  const whirlpoolPubkey = new PublicKey(input.whirlpoolAddress);
 
-SOL/USDC(0.3%) ``HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ`` is nice example because it is one of popular pool in Orca.
+  // get liquidity distribution
+  const liquidityDistribution = await getLiquidityDistribution(client, whirlpoolPubkey);
 
-```
-...
+  // print liquidity distribution
+  console.log("liquidity distribution:");
+  console.log("currentTickIndex:", liquidityDistribution.currentTickIndex);
+  console.log("currentPrice:", liquidityDistribution.currentPrice.toFixed(9));
+  console.log("currentLiquidity:", liquidityDistribution.currentLiquidity.toString());
+  console.log("datapoints:");
+  liquidityDistribution.datapoints.forEach((p) => {
+    console.log(`  ${p.tickIndex}: ${p.price.toFixed(9)}: ${p.liquidity.toString()}`);
+  });
+}
+
+main();
+
+/*
+
+Sample output:
+
 ZERO/USDC(128): FF38D19wyMxnjnJ7RMUwN4XhMgv3NHKarbNZNtBA9ro1
 ZERO/USDC(256): HCHp3X4RzKEi1ZwD9FeE9bfwe2pnyorU2mFNBtNvAowe
 ZERO/USDC(64): G516tV5Pn4JVDzdUC76gtbtCSgdKW2UuYHxvdEPVKCB8
@@ -354,4 +393,5 @@ datapoints:
   36800: 39639.100293359: 465643559037
   138112: 995011412.609135811: 465642019029
   443584: 18350384977071360405860.340404819: 0
-```
+
+*/
